@@ -182,17 +182,52 @@ with tab2:
         if selected_tech != "All":
             filtered_df = triage_logic.filter_by_tech(df, selected_tech)
         else:
-            filtered_df = df
-            
+            filtered_df = df.copy()
+
+        # --- Schema Validation Test ---
+        with st.expander("🛠️ Schema Debug Info"):
+            if not filtered_df.empty:
+                sample_tech = filtered_df.iloc[0]['tech_stack']
+                st.write(f"Sample 'tech_stack' value: `{sample_tech}`")
+                st.write(f"Type: `{type(sample_tech)}`")
+                if isinstance(sample_tech, list):
+                    st.success("✅ Schema Integrity: 'tech_stack' is a list")
+                else:
+                    st.error(f"❌ Schema Validation Failed: Expected list, got {type(sample_tech)}")
+        
         st.subheader(f"Targets ({len(filtered_df)})")
-        st.dataframe(filtered_df, use_container_width=True)
+        
+        # Add Select Column
+        if 'Select' not in filtered_df.columns:
+            filtered_df.insert(0, "Select", False)
+        
+        # Use Data Editor for selection
+        edited_df = st.data_editor(
+            filtered_df,
+            column_config={
+                "Select": st.column_config.CheckboxColumn(
+                    "Select",
+                    help="Select target for Nuclei scan",
+                    default=False,
+                )
+            },
+            disabled=["subdomain", "status_code", "title", "tech_stack"],
+            hide_index=True,
+            use_container_width=True
+        )
         
         # 2. Run Nuclei
         st.markdown("---")
         if st.button("☢️ Run Nuclei on Filtered Targets"):
-            with st.spinner("Running Nuclei... (Scanning filtered subdomains)"):
-                targets = filtered_df['subdomain'].tolist()
-                output = triage_logic.run_nuclei(targets)
+            # Filter for selected rows
+            selected_rows = edited_df[edited_df['Select'] == True]
+            
+            if selected_rows.empty:
+                st.warning("⚠️ Please select at least one target from the list above.")
+            else:
+                with st.spinner(f"Running Nuclei on {len(selected_rows)} targets..."):
+                    targets = selected_rows['subdomain'].tolist()
+                    output = triage_logic.run_nuclei(targets)
                 
                 # Check for error string
                 if isinstance(output, str) and output.startswith("❌"):

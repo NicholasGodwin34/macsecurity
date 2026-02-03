@@ -24,14 +24,12 @@ type Result struct {
 
 // HttpxResult matches the JSON output from httpx
 type HttpxResult struct {
-	Input      string `json:"input"`
-	Url        string `json:"url"`
-	StatusCode int    `json:"status_code"`
-	Title      string `json:"title"`
-	Tech       []struct {
-		Name string `json:"name"`
-	} `json:"tech"`
-	WebServer []string `json:"webserver"`
+	Input      string   `json:"input"`
+	Url        string   `json:"url"`
+	StatusCode int      `json:"status_code"`
+	Title      string   `json:"title"`
+	Tech       []string `json:"tech"`
+	WebServer  string   `json:"webserver"`
 }
 
 func main() {
@@ -61,7 +59,9 @@ func main() {
 		fatalError("Failed to create pipe", err)
 	}
 	subfinderCmd.Stdout = writer
+	subfinderCmd.Stderr = os.Stderr
 	httpxCmd.Stdin = reader
+	httpxCmd.Stderr = os.Stderr
 
 	// Pipe httpx stdout to our processing
 	httpxOut, err := httpxCmd.StdoutPipe()
@@ -114,6 +114,7 @@ func main() {
 		line := scanner.Bytes()
 		var hRes HttpxResult
 		if err := json.Unmarshal(line, &hRes); err != nil {
+			fmt.Fprintf(os.Stderr, "Error unmarshalling line: %s, Error: %v\n", string(line), err)
 			continue // Skip malformed lines
 		}
 
@@ -154,9 +155,8 @@ func checkBinaries() {
 
 func extractTech(h HttpxResult) []string {
 	var techs []string
-	for _, t := range h.Tech {
-		techs = append(techs, t.Name)
-	}
+
+	techs = append(techs, h.Tech...)
 	// Append webserver if distinct? Usually httpx puts it in tech-detect too,
 	// but let's just use what's in 'Tech' for now to be safe and clean.
 	// If needed we can check h.WebServer
