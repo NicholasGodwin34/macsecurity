@@ -103,6 +103,11 @@ def map_tags_to_category(tags_list):
             for k in keywords:
                 if k in tag:
                     return cat
+    
+    # Version-based checks
+    for tag in tags:
+        if "outdated" in tag or "deprecated" in tag or "cve" in tag:
+            return "Vulnerable and Outdated Components"
                     
     return "Other"
 
