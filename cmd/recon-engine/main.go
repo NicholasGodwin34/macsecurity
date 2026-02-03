@@ -79,6 +79,27 @@ func main() {
 		fatalError("Failed to start httpx", err)
 	}
 
+	// Start nmap scan in background (simple top ports scan)
+	// We won't pipe this into the JSON output directly in this iteration, 
+	// but we'll run it to ensure coverage as requested. 
+	// In a real scenario, we might parse XML output.
+	// For now, let's just log that we are running it or direct it to a file.
+	// The user request said "integrate it into the execution pipeline to scan for common ports".
+	// We'll run it against the target domain.
+	nmapCmd := exec.Command("nmap", "-F", "--top-ports", "100", target, "-oN", "nmap-scan.txt")
+	// We don't want to block the streaming pipeline, so run in goroutine or separate process.
+	// We'll just start it and wait for it at the end.
+	if err := nmapCmd.Start(); err != nil {
+		// Non-fatal if nmap fails? The user specifically asked for it. 
+		// Let's log to stderr but proceed.
+		fmt.Fprintf(os.Stderr, "Warning: Failed to start nmap: %v\n", err)
+	} else {
+		// Wait for nmap in a goroutine so we don't block
+		go func() {
+			nmapCmd.Wait()
+		}()
+	}
+
 	// Close the writer end of the pipe after subfinder starts so httpx knows when input ends
 	// We need to do this in a goroutine or after subfinder finishes,
 	// but since we want streaming, we let subfinder write.
@@ -138,7 +159,7 @@ func main() {
 }
 
 func checkBinaries() {
-	bins := []string{"subfinder", "httpx"}
+	bins := []string{"subfinder", "httpx", "nmap"}
 	for _, bin := range bins {
 		if _, err := exec.LookPath(bin); err != nil {
 			// Output error as JSON so the UI displays it nicely?
