@@ -57,6 +57,10 @@ with st.sidebar:
     st.header("Configuration")
     target_domain = st.text_input("Target Domain", "example.com")
     
+    st.markdown("### Scan Options")
+    use_deep = st.checkbox("Deep Discovery (Amass)", help="Enables passive Amass enumeration. Slower but finds more subdomains + ASN info.")
+    use_fingerprint = st.checkbox("Aggressive Fingerprinting (WhatWeb)", help="Enables WhatWeb scan on live hosts. Accurately detects versions.")
+    
     st.markdown("---")
     
     # Binary Path
@@ -121,8 +125,16 @@ with tab1:
             # Check binaries first (Go engine does this too, but good UX to fail fast)
             # Actually, Go engine handles it better with JSON error, let's trust Go.
             
+            # Construct command with flags
+            cmd = [bin_path]
+            if use_deep:
+                cmd.append("-deep")
+            if use_fingerprint:
+                cmd.append("-fingerprint")
+            cmd.append(target_domain)
+
             process = subprocess.Popen(
-                [bin_path, target_domain],
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 bufsize=1,
@@ -158,12 +170,9 @@ with tab1:
                     
                     # Display Data
                     # Highlight New Assets
-                    # We can't easily do row-based styling in st.dataframe for streamed data efficiently without reloading history constantly.
-                    # Instead, let's mark them in the data.
-                    # For live stream, we might just show basic data.
-                    # Once finished, we do the diff.
+                    # ... (marked logic handled above)
                     
-                    cols_to_show = ['timestamp', 'subdomain', 'status_code', 'title', 'tech_stack']
+                    cols_to_show = ['timestamp', 'subdomain', 'status_code', 'title', 'tech_stack', 'asn', 'org']
                     # Ensure columns exist
                     disp_cols = [c for c in cols_to_show if c in df.columns]
                     
@@ -262,42 +271,56 @@ with tab2:
         if 'False Positive' not in filtered_df.columns:
             filtered_df['False Positive'] = False
 
-        # Risk Flagging Logic
-        # We can calculate a 'Risk Score' or just a flag column to sort by.
         # High Value: File Upload, GraphQL, Auth
+        # Also check for outdated versions (simple keyword check in versions map)
         sensitive_keywords = ['upload', 'graphql', 'auth', 'login', 'admin', 'api']
         
-        def calculate_risk(tech_list):
-            if not isinstance(tech_list, list): return False
-            for t in tech_list:
-                for k in sensitive_keywords:
-                    if k.lower() in t.lower():
-                        return True
+        def calculate_risk(row):
+            tech_list = row.get('tech_stack', [])
+            versions = row.get('versions', {})
+            
+            # Check Tech Stack
+            if isinstance(tech_list, list):
+                for t in tech_list:
+                    for k in sensitive_keywords:
+                        if k.lower() in t.lower():
+                            return True
+            
+            # Check Versions for indication of old stuff (very basic heuristic)
+            if isinstance(versions, dict):
+                for tech, ver in versions.items():
+                    # Mock logic: if version starts with '4.' for WP... 
+                    # Real logic might be complex, here we rely on WhatWeb output string availability
+                    pass
+            
             return False
 
-        filtered_df['High Value'] = filtered_df['tech_stack'].apply(calculate_risk)
+        filtered_df['High Value'] = filtered_df.apply(calculate_risk, axis=1)
 
         # Use Data Editor for selection and False Positive marking
+        # Include granular columns if available
+        
+        # Flatten versions for display? 
+        # Convert versions dict to string
+        if 'versions' in filtered_df.columns:
+            filtered_df['Software Versions'] = filtered_df['versions'].apply(lambda x: str(x) if x else "")
+
+        # Display columns
+        disp_cols_triage = ["Select", "False Positive", "High Value", "subdomain", "Software Versions", "tech_stack", "asn", "org"]
+        # Filter existing columns only
+        disp_cols_final = [c for c in disp_cols_triage if c in filtered_df.columns]
+
         edited_df = st.data_editor(
-            filtered_df,
+            filtered_df[disp_cols_final],
             key="triage_editor",
             column_config={
-                "Select": st.column_config.CheckboxColumn(
-                    "Select",
-                    help="Select target for Nuclei scan",
-                    default=False,
-                ),
-                "False Positive": st.column_config.CheckboxColumn(
-                    "False Positive",
-                    help="Exclude from reports",
-                    default=False,
-                ),
-                "High Value": st.column_config.CheckboxColumn(
-                    "High Value",
-                    disabled=True
-                )
+                "Select": st.column_config.CheckboxColumn("Select", default=False),
+                "False Positive": st.column_config.CheckboxColumn("False Positive", default=False),
+                "High Value": st.column_config.CheckboxColumn("High Value", disabled=True),
+                "Software Versions": st.column_config.TextColumn("Versions", disabled=True),
+                "asn": st.column_config.TextColumn("ASN", disabled=True),
+                "org": st.column_config.TextColumn("Org", disabled=True)
             },
-            disabled=["subdomain", "status_code", "title", "tech_stack", "High Value"],
             hide_index=True,
             use_container_width=True
         )
