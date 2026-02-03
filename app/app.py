@@ -15,7 +15,7 @@ import triage_logic
 
 # Page Config
 st.set_page_config(
-    page_title="Antigravity Recon 1.2",
+    page_title="Macsecurity Recon Framework",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -49,7 +49,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.title("🛡️ ANTIGRAVITY RECON")
+st.title("🛡️ MACSECURITY RECON")
 st.markdown("### Phase 1.2: Weaponization")
 
 # --- Sidebar ---
@@ -76,6 +76,25 @@ if "recon_data" not in st.session_state:
     st.session_state.recon_data = []
 if "vulnerabilities" not in st.session_state:
     st.session_state.vulnerabilities = []
+
+# --- Helper Functions for Asset Tracking ---
+HISTORY_FILE = "app/recon_history.json"
+
+def load_history():
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r") as f:
+                return set(json.load(f))
+        except:
+            return set()
+    return set()
+
+def save_history(subdomains):
+    # Merge with existing
+    existing = load_history()
+    existing.update(subdomains)
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(list(existing), f)
 
 # --- Workers ---
 def read_output(process, data_queue):
@@ -138,6 +157,12 @@ with tab1:
                     metric_col2.metric("Live (200 OK)", len(df[df['status_code'] == 200]))
                     
                     # Display Data
+                    # Highlight New Assets
+                    # We can't easily do row-based styling in st.dataframe for streamed data efficiently without reloading history constantly.
+                    # Instead, let's mark them in the data.
+                    # For live stream, we might just show basic data.
+                    # Once finished, we do the diff.
+                    
                     cols_to_show = ['timestamp', 'subdomain', 'status_code', 'title', 'tech_stack']
                     # Ensure columns exist
                     disp_cols = [c for c in cols_to_show if c in df.columns]
@@ -150,6 +175,25 @@ with tab1:
             
             if process.returncode == 0:
                 status_text.success("✅ Recon Completed!")
+                
+                # --- Asset Tracking & Highlighting ---
+                current_subs = [x['subdomain'] for x in st.session_state.recon_data]
+                historical_subs = load_history()
+                new_subs = set(current_subs) - historical_subs
+                
+                if new_subs:
+                    st.toast(f"🎉 Found {len(new_subs)} NEW subdomains!")
+                
+                # Update Dataframe to indicate NEW
+                for item in st.session_state.recon_data:
+                    item['is_new'] = item['subdomain'] in new_subs
+                
+                # Save to history
+                save_history(current_subs)
+                
+                # Refresh Dataframe display with 'New' badge logic (simulated by column or color)
+                # Streamlit dataframe formatting is limited, but we can add an icon or column.
+                
             
         except Exception as e:
             status_text.error(f"❌ Error: {str(e)}")
@@ -157,7 +201,20 @@ with tab1:
     else:
         if st.session_state.recon_data:
             df = pd.DataFrame(st.session_state.recon_data)
-            st.dataframe(df, use_container_width=True)
+            
+            # Add 'is_new' if not present (from history check above)
+            if 'is_new' not in df.columns:
+                 # Attempt load if recon was done previously but session state lost 'is_new' logic?
+                 # Or just default False
+                 df['is_new'] = False
+            
+            st.dataframe(
+                df, 
+                column_config={
+                    "is_new": st.column_config.CheckboxColumn("New Asset?", disabled=True)
+                },
+                use_container_width=True
+            )
         else:
             st.info("Awaiting command...")
 
@@ -201,20 +258,54 @@ with tab2:
         if 'Select' not in filtered_df.columns:
             filtered_df.insert(0, "Select", False)
         
-        # Use Data Editor for selection
+        # Add False Positive Column
+        if 'False Positive' not in filtered_df.columns:
+            filtered_df['False Positive'] = False
+
+        # Risk Flagging Logic
+        # We can calculate a 'Risk Score' or just a flag column to sort by.
+        # High Value: File Upload, GraphQL, Auth
+        sensitive_keywords = ['upload', 'graphql', 'auth', 'login', 'admin', 'api']
+        
+        def calculate_risk(tech_list):
+            if not isinstance(tech_list, list): return False
+            for t in tech_list:
+                for k in sensitive_keywords:
+                    if k.lower() in t.lower():
+                        return True
+            return False
+
+        filtered_df['High Value'] = filtered_df['tech_stack'].apply(calculate_risk)
+
+        # Use Data Editor for selection and False Positive marking
         edited_df = st.data_editor(
             filtered_df,
+            key="triage_editor",
             column_config={
                 "Select": st.column_config.CheckboxColumn(
                     "Select",
                     help="Select target for Nuclei scan",
                     default=False,
+                ),
+                "False Positive": st.column_config.CheckboxColumn(
+                    "False Positive",
+                    help="Exclude from reports",
+                    default=False,
+                ),
+                "High Value": st.column_config.CheckboxColumn(
+                    "High Value",
+                    disabled=True
                 )
             },
-            disabled=["subdomain", "status_code", "title", "tech_stack"],
+            disabled=["subdomain", "status_code", "title", "tech_stack", "High Value"],
             hide_index=True,
             use_container_width=True
         )
+        
+        # Persist FPs
+        if not edited_df.empty and 'False Positive' in edited_df.columns:
+             fps = edited_df[edited_df['False Positive'] == True]['subdomain'].tolist()
+             st.session_state.fp_hosts = set(fps)
         
         # 2. Run Nuclei
         st.markdown("---")
@@ -242,13 +333,16 @@ with tab2:
                             if not l: continue
                             v = json.loads(l)
                             # Minimal mapping to our schema
+                            tags = v.get('info', {}).get('tags', [])
                             vuln_obj = {
                                 "template": v.get('info', {}).get('name', 'Unknown'),
                                 "template_id": v.get('template-id'),
                                 "severity": v.get('info', {}).get('severity', 'info'),
                                 "host": v.get('host'),
                                 "matched_at": v.get('matched-at', ''),
-                                "timestamp": v.get('timestamp')
+                                "timestamp": v.get('timestamp'),
+                                "category": triage_logic.map_tags_to_category(tags),
+                                "remediation": v.get('info', {}).get('remediation', 'No specific remediation provided.')
                             }
                             st.session_state.vulnerabilities.append(vuln_obj)
                             
@@ -265,8 +359,14 @@ with tab3:
     st.header("Report Generator")
     
     if st.button("Generate Report"):
-        if not st.session_state.vulnerabilities:
-            st.warning("No vulnerabilities found to report.")
+        # Filter out False Positives if tracked
+        fp_hosts = st.session_state.get('fp_hosts', set())
+        
+        # Filter vulnerabilities where host is NOT in fp_hosts
+        valid_vulns = [v for v in st.session_state.vulnerabilities if v.get('host') not in fp_hosts]
+
+        if not valid_vulns:
+            st.warning("No vulnerabilities found to report (or all marked as False Positive).")
         else:
             try:
                 env = Environment(loader=FileSystemLoader("app/templates"))
@@ -275,7 +375,7 @@ with tab3:
                 report_md = template.render(
                     target=target_domain,
                     date=datetime.now().strftime("%Y-%m-%d"),
-                    vulns=st.session_state.vulnerabilities
+                    vulns=valid_vulns
                 )
                 
                 st.markdown("### Preview")

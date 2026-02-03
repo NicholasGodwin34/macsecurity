@@ -15,6 +15,7 @@ During the automated reconnaissance of **{{ target }}**, we identified **{{ vuln
 {% for v in vulns %}
 ### {{ loop.index }}. {{ v.template }}
 - **Severity:** {{ v.severity }}
+- **Category:** {{ v.category }}
 - **Target:** {{ v.host }}
 - **Description:** 
   Automated finding by Nuclei template `{{ v.template_id }}`. 
@@ -23,6 +24,22 @@ During the automated reconnaissance of **{{ target }}**, we identified **{{ vuln
   ```
   {{ v.matched_at }}
   ```
+
+### Impact (Recommended)
+{% if v.severity == 'critical' %}
+**CRITICAL RISK**: Exploitation of this vulnerability could lead to full system compromise, data exfiltration, or unauthorized access. Immediate action is required.
+{% elif v.severity == 'high' %}
+**HIGH RISK**: This vulnerability could allow an attacker to access sensitive data or perform unauthorized actions. Prioritize remediation.
+{% elif v.severity == 'medium' %}
+**MEDIUM RISK**: Exploitation provides limited access or requires specific conditions. Remediation should be scheduled.
+{% elif v.severity == 'low' %}
+**LOW RISK**: Minor information disclosure or configuration issue.
+{% else %}
+**INFO**: Informational finding.
+{% endif %}
+
+### Remediation Steps
+{{ v.remediation }}
 
 ---
 {% endfor %}
